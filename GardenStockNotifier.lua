@@ -1,17 +1,49 @@
-local Players = game:GetService("Players")
+local game = game
 local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer.PlayerGui
+local wait = task and task.wait or wait
 
--- Precompute static values
+local farmContainer = Workspace:FindFirstChild("Farm")
+local fruitWebhookUrl = "URL_WEBHOOK_HERE"
+local shopWebhookUrl = "URL_WEBHOOK_HERE"
+
+local function makeHttpRequest(url, data)
+    if syn and syn.request then
+        local response = syn.request({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(data)
+        })
+        return response.Success, response.StatusMessage
+    elseif request then
+        local response = request({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(data)
+        })
+        return response.Success, response.StatusMessage
+    end
+    return false, "Unsupported exploit environment"
+end
+
+local FarmUtils = {}
+
+local pingTable = {
+    ["talkingpotato5000"] = "<@362345753093472257>",
+    ["wauffal"] = "<@1309286689646055437>"
+}
+
 local SPECIAL_ITEMS = {
     ["Godly Sprinkler"] = true,
     ["Master Sprinkler"] = true,
     ["Candy Blossom"] = true,
     ["Grape"] = true,
     ["Mango"] = true,
-    ["Bamboo"] = true,
     ["Dragon Fruit"] = true
 }
 
@@ -21,7 +53,6 @@ local SHOP_CONFIG = {
     Easter = {emoji = "🐣", title = "🐰 Easter Shop Stock", color = 0xFFB6C1, restock = "60 minutes!"}
 }
 
--- Cache UI elements
 local SeedTimer = PlayerGui.Seed_Shop.Frame.Frame.Timer
 local GearItems = PlayerGui.Gear_Shop:FindFirstChild("Item_Size", true)
 if GearItems then GearItems = GearItems.Parent end
@@ -31,49 +62,40 @@ local EasterTimer = PlayerGui.Easter_Shop.Frame.Frame.Timer
 local EasterItems = PlayerGui.Easter_Shop:FindFirstChild("Item_Size", true)
 if EasterItems then EasterItems = EasterItems.Parent end
 
--- Validate HTTP request function
-local http_request = http_request or request or syn.request or nil
-if not http_request then
-    error("No HTTP request function found. Your exploit must support syn.request, request, or http_request.")
-end
+FarmUtils.IsRunning = false
+FarmUtils.CheckInterval = 60
+local lastResults = {}
+local lastSeedGearTimerSeconds, lastEasterTimerSeconds = -1, -1
+local lastSeedGearReset, lastEasterReset = 0, 0
+local wasRainActive, wasThunderstormActive = false, false
+local COOLDOWN = 15
 
--- Generic function to get stock from cached items
-local function GetStock(Items: Instance, IgnoreNoStock: boolean?): table
+local function GetStock(Items)
     if not Items then return {} end
     local ResultTable = {}
-
     for _, Item in pairs(Items:GetChildren()) do
         local MainFrame = Item:FindFirstChild("Main_Frame")
         if not MainFrame then continue end
-
         local StockTextLabel = MainFrame:FindFirstChild("Stock_Text")
         if not StockTextLabel then continue end
-
         local StockCount = tonumber(StockTextLabel.Text:match("%d+"))
-        if not StockCount then continue end
-
-        if IgnoreNoStock and StockCount > 0 then
+        if StockCount and StockCount > 0 then
             ResultTable[Item.Name] = StockCount
         end
     end
-
     return ResultTable
 end
 
--- Function to get the timer in seconds from cached timer
-local function GetTimerSeconds(Timer: Instance): number
+local function GetTimerSeconds(Timer)
     local time = Timer.Text:match("%d+:%d+")
     if not time then return 0 end
-
     local minutes, seconds = time:match("(%d+):(%d+)")
     return (tonumber(minutes) or 0) * 60 + (tonumber(seconds) or 0)
 end
 
--- Function to format stock table into a string for Discord embed with emojis
-local function FormatStock(StockTable: table, shopType: string): string
+local function FormatStock(StockTable, shopType)
     local config = SHOP_CONFIG[shopType]
     if not next(StockTable) then return "No items in stock" end
-
     local result = ""
     for itemName, stockCount in pairs(StockTable) do
         result = result .. "- " .. config.emoji .. " " .. stockCount .. "x " .. itemName .. "\n"
@@ -81,25 +103,103 @@ local function FormatStock(StockTable: table, shopType: string): string
     return result:sub(1, -2)
 end
 
--- Function to send a single embed to Discord webhook
-local function SendWebhookEmbed(embed: table, mention: boolean)
-    pcall(http_request, {
-        Url = "WEBHOOK_URL_HERE",
-        Method = "POST",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode({
-            content = mention and "@everyone" or "",
-            embeds = {embed}
-        })
+local function SendWebhookEmbed(url, embed, mention)
+    pcall(makeHttpRequest, url, {
+        content = mention and "@everyone" or "",
+        embeds = {embed},
+        username = "goid",
+        avatar_url = "https://i.imgur.com/4M34hi2.png"
     })
 end
 
--- Function to create and send embeds for Seed, Gear, and Easter timer (if applicable)
-local function PostSeedAndGearStock(easterTimerSeconds: number, isEasterRespawning: boolean)
-    task.wait(3) -- Ensure stock list is updated
+function FarmUtils.CountFruitsAndNotify(farmContainer, webhookUrl)
+    if not farmContainer or not webhookUrl then return end
 
-    local seedResult = GetStock(SeedItems, true)
-    local gearResult = GetStock(GearItems, true)
+    local players = {}
+    for _, player in pairs(Players:GetPlayers()) do
+        table.insert(players, player.Name)
+    end
+
+    for _, farm in pairs(farmContainer:GetChildren()) do
+        if not (farm:IsA("Folder") or farm:IsA("Model")) then continue end
+        local important = farm:FindFirstChild("Important")
+        if not important then continue end
+        local data = important:FindFirstChild("Data")
+        local plantsPhysical = important:FindFirstChild("Plants_Physical")
+        if not (data and plantsPhysical) then continue end
+        local ownerValue = data:FindFirstChild("Owner")
+        if not ownerValue or not pingTable[ownerValue.Value] then continue end
+        if not table.find(players, ownerValue.Value) then continue end
+
+        local candyBlossomTreeCount = 0
+        local goldFruitCount = 0
+        local rainbowFruitCount = 0
+
+        for _, plant in pairs(plantsPhysical:GetChildren()) do
+            if plant:IsA("Model") and plant.Name == "Candy Blossom" then
+                candyBlossomTreeCount += 1
+                local fruitsFolder = plant:FindFirstChild("Fruits")
+                if fruitsFolder then
+                    for _, fruit in pairs(fruitsFolder:GetChildren()) do
+                        if fruit:IsA("Model") and fruit.Name == "Candy Blossom" then
+                            local variantValue = fruit:FindFirstChild("Variant")
+                            if variantValue and variantValue:IsA("StringValue") then
+                                if variantValue.Value == "Gold" then
+                                    goldFruitCount += 1
+                                elseif variantValue.Value == "Rainbow" then
+                                    rainbowFruitCount += 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if goldFruitCount == 0 and rainbowFruitCount == 0 then continue end
+
+        local farmKey = farm:GetFullName()
+        if lastResults[farmKey] and 
+           goldFruitCount <= lastResults[farmKey].GoldFruitCount and 
+           rainbowFruitCount <= lastResults[farmKey].RainbowFruitCount then
+            continue
+        end
+
+        lastResults[farmKey] = {
+            Owner = ownerValue.Value,
+            TreeCount = candyBlossomTreeCount,
+            GoldFruitCount = goldFruitCount,
+            RainbowFruitCount = rainbowFruitCount
+        }
+
+        local embed = {
+            title = "Candy Blossom Farm Update",
+            description = string.format(
+                "**Golden Fruits**: %d\n**Rainbow Fruits**: %d 🌈",
+                goldFruitCount,
+                rainbowFruitCount
+            ),
+            color = 0xF4C7D6,
+            fields = {
+                {name = "Owner", value = ownerValue.Value, inline = true},
+                {name = "Trees", value = tostring(candyBlossomTreeCount), inline = true}
+            },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        }
+
+        pcall(makeHttpRequest, webhookUrl, {
+            content = pingTable[ownerValue.Value],
+            embeds = {embed},
+            username = "goid",
+            avatar_url = "https://i.imgur.com/4M34hi2.png"
+        })
+    end
+end
+
+function FarmUtils.PostSeedAndGearStock(easterTimerSeconds, isEasterRespawning, webhookUrl)
+    task.wait(3)
+    local seedResult = GetStock(SeedItems)
+    local gearResult = GetStock(GearItems)
 
     local seedStockText = FormatStock(seedResult, "Seed")
     local gearStockText = FormatStock(gearResult, "Gear")
@@ -119,7 +219,7 @@ local function PostSeedAndGearStock(easterTimerSeconds: number, isEasterRespawni
     end
 
     task.spawn(function()
-        SendWebhookEmbed({
+        SendWebhookEmbed(webhookUrl, {
             title = SHOP_CONFIG.Seed.title,
             description = seedStockText,
             color = SHOP_CONFIG.Seed.color,
@@ -128,22 +228,18 @@ local function PostSeedAndGearStock(easterTimerSeconds: number, isEasterRespawni
         }, seedMention)
 
         task.wait(1)
-
-        SendWebhookEmbed({
+        SendWebhookEmbed(webhookUrl, {
             title = SHOP_CONFIG.Gear.title,
             description = gearStockText,
             color = SHOP_CONFIG.Gear.color,
-            fields = {{name = "⏳ Restock in", value = SHOP_CONFIG.Gear.restock, inline = true}},
+            fields = {{name = "⏳ Restock in", value = SHOP_CONFIG.Seed.restock, inline = true}},
             timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
         }, gearMention)
 
-        -- Send Easter timer embed if Easter is not respawning
         if not isEasterRespawning then
             local minutesRemaining = math.floor(easterTimerSeconds / 60)
             local secondsRemaining = easterTimerSeconds % 60
             local timeString = string.format("%d:%02d", minutesRemaining, secondsRemaining)
-
-            -- Check if the remaining time is close to 45, 25, 15, or 5 minutes (within ±30 seconds)
             local targetMinutes = {45, 25, 15, 5}
             local shouldAnnounce = false
             for _, target in ipairs(targetMinutes) do
@@ -153,10 +249,9 @@ local function PostSeedAndGearStock(easterTimerSeconds: number, isEasterRespawni
                     break
                 end
             end
-
             if shouldAnnounce then
                 task.wait(1)
-                SendWebhookEmbed({
+                SendWebhookEmbed(webhookUrl, {
                     title = "🐰 Easter Shop Timer",
                     description = "Easter Shop will restock in " .. timeString .. "!",
                     color = SHOP_CONFIG.Easter.color,
@@ -167,11 +262,9 @@ local function PostSeedAndGearStock(easterTimerSeconds: number, isEasterRespawni
     end)
 end
 
--- Function to create and send embed for Easter shop
-local function PostEasterStock()
-    task.wait(3) -- Ensure stock list is updated
-
-    local easterResult = GetStock(EasterItems, true)
+function FarmUtils.PostEasterStock(webhookUrl)
+    task.wait(3)
+    local easterResult = GetStock(EasterItems)
     local easterStockText = FormatStock(easterResult, "Easter")
 
     local mention = false
@@ -183,7 +276,7 @@ local function PostEasterStock()
     end
 
     task.spawn(function()
-        SendWebhookEmbed({
+        SendWebhookEmbed(webhookUrl, {
             title = SHOP_CONFIG.Easter.title,
             description = easterStockText,
             color = SHOP_CONFIG.Easter.color,
@@ -193,61 +286,80 @@ local function PostEasterStock()
     end)
 end
 
--- Function to send event start embed
-local function SendEventEmbed(eventName: string, emoji: string)
-    SendWebhookEmbed({
+function FarmUtils.SendEventEmbed(eventName, emoji, webhookUrl)
+    SendWebhookEmbed(webhookUrl, {
         title = emoji .. " " .. eventName .. " Event Started!",
         description = eventName .. " event is now active!",
-        color = 0x00BFFF, -- Deep Sky Blue for events
+        color = 0x00BFFF,
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
     }, true)
 end
 
--- Main loop: Check timers and events every 2 seconds
-local lastSeedGearTimerSeconds, lastEasterTimerSeconds = -1, -1
-local lastSeedGearReset, lastEasterReset = 0, 0
-local COOLDOWN = 15 -- Cooldown in seconds
+function FarmUtils.StartMonitoring(fruitWebhookUrl, shopWebhookUrl)
+    if FarmUtils.IsRunning then return end
 
--- Event tracking variables
-local wasRainActive = false
-local wasThunderstormActive = false
+    FarmUtils.IsRunning = true
 
-while true do
-    local currentTime = os.time()
-    local seedGearTimerSeconds = GetTimerSeconds(SeedTimer)
-    local easterTimerSeconds = GetTimerSeconds(EasterTimer)
+    coroutine.wrap(function()
+        while FarmUtils.IsRunning do
+            pcall(function()
+                FarmUtils.CountFruitsAndNotify(Workspace:FindFirstChild("Farm"), fruitWebhookUrl)
+            end)
+            wait(FarmUtils.CheckInterval)
+        end
+    end)()
 
-    -- Check for RainEvent and Thunderstorm events
-    local isRainActive = Workspace:GetAttribute("RainEvent") == true
-    local isThunderstormActive = Workspace:GetAttribute("Thunderstorm") == true
+    coroutine.wrap(function()
+        while FarmUtils.IsRunning do
+            pcall(function()
+                local currentTime = os.time()
+                local seedGearTimerSeconds = GetTimerSeconds(SeedTimer)
+                local easterTimerSeconds = GetTimerSeconds(EasterTimer)
 
-    if isRainActive and not wasRainActive then
-        SendEventEmbed("Rain", "☔")
-    end
-    if isThunderstormActive and not wasThunderstormActive then
-        SendEventEmbed("Thunderstorm", "⛈️")
-    end
-    wasRainActive = isRainActive
-    wasThunderstormActive = isThunderstormActive
+                local isRainActive = Workspace:GetAttribute("RainEvent") == true
+                local isThunderstormActive = Workspace:GetAttribute("Thunderstorm") == true
 
-    -- Check shop timers
-    local isEasterRespawning = false
-    if easterTimerSeconds <= 1 and currentTime - lastEasterReset >= COOLDOWN then
-        PostEasterStock()
-        lastEasterTimerSeconds = easterTimerSeconds
-        lastEasterReset = currentTime
-        isEasterRespawning = true
-    else
-        lastEasterTimerSeconds = easterTimerSeconds
-    end
+                if isRainActive and not wasRainActive then
+                    FarmUtils.SendEventEmbed("Rain", "☔", shopWebhookUrl)
+                end
+                if isThunderstormActive and not wasThunderstormActive then
+                    FarmUtils.SendEventEmbed("Thunderstorm", "⛈️", shopWebhookUrl)
+                end
+                wasRainActive = isRainActive
+                wasThunderstormActive = isThunderstormActive
 
-    if seedGearTimerSeconds <= 1 and currentTime - lastSeedGearReset >= COOLDOWN then
-        PostSeedAndGearStock(easterTimerSeconds, isEasterRespawning)
-        lastSeedGearTimerSeconds = seedGearTimerSeconds
-        lastSeedGearReset = currentTime
-    else
-        lastSeedGearTimerSeconds = seedGearTimerSeconds
-    end
+                local isEasterRespawning = false
+                if easterTimerSeconds <= 1 and currentTime - lastEasterReset >= COOLDOWN then
+                    FarmUtils.PostEasterStock(shopWebhookUrl)
+                    lastEasterTimerSeconds = easterTimerSeconds
+                    lastEasterReset = currentTime
+                    isEasterRespawning = true
+                else
+                    lastEasterTimerSeconds = easterTimerSeconds
+                end
 
-    task.wait(2)
+                if seedGearTimerSeconds <= 1 and currentTime - lastSeedGearReset >= COOLDOWN then
+                    FarmUtils.PostSeedAndGearStock(easterTimerSeconds, isEasterRespawning, shopWebhookUrl)
+                    lastSeedGearTimerSeconds = seedGearTimerSeconds
+                    lastSeedGearReset = currentTime
+                else
+                    lastSeedGearTimerSeconds = seedGearTimerSeconds
+                end
+            end)
+            wait(2)
+        end
+    end)()
 end
+
+function FarmUtils.StopMonitoring()
+    FarmUtils.IsRunning = false
+end
+
+getgenv().FarmUtils = FarmUtils
+
+if farmContainer then
+    FarmUtils.StartMonitoring(fruitWebhookUrl, shopWebhookUrl)
+    print("Bot is monitering")
+end
+
+return FarmUtils
