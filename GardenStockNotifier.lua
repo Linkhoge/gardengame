@@ -1,12 +1,11 @@
 local game = game
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer.PlayerGui
 local wait = task and task.wait or wait
 
-local farmContainer = Workspace:FindFirstChild("Farm")
+local farmContainer = workspace:FindFirstChild("Farm")
 local fruitWebhookUrl = "URL_WEBHOOK_HERE"
 local shopWebhookUrl = "URL_WEBHOOK_HERE"
 
@@ -304,7 +303,7 @@ function FarmUtils.StartMonitoring(fruitWebhookUrl, shopWebhookUrl)
     coroutine.wrap(function()
         while FarmUtils.IsRunning do
             pcall(function()
-                FarmUtils.CountFruitsAndNotify(Workspace:FindFirstChild("Farm"), fruitWebhookUrl)
+                FarmUtils.CountFruitsAndNotify(workspace:FindFirstChild("Farm"), fruitWebhookUrl)
             end)
             wait(FarmUtils.CheckInterval)
         end
@@ -317,8 +316,8 @@ function FarmUtils.StartMonitoring(fruitWebhookUrl, shopWebhookUrl)
                 local seedGearTimerSeconds = GetTimerSeconds(SeedTimer)
                 local easterTimerSeconds = GetTimerSeconds(EasterTimer)
 
-                local isRainActive = Workspace:GetAttribute("RainEvent") == true
-                local isThunderstormActive = Workspace:GetAttribute("Thunderstorm") == true
+                local isRainActive = workspace:GetAttribute("RainEvent") == true
+                local isThunderstormActive = workspace:GetAttribute("Thunderstorm") == true
 
                 if isRainActive and not wasRainActive then
                     FarmUtils.SendEventEmbed("Rain", "☔", shopWebhookUrl)
