@@ -191,7 +191,7 @@ function FarmUtils.CountFruitsAndNotify(farmContainer, webhookUrl)
         pcall(makeHttpRequest, webhookUrl, {
             content = pingTable[ownerValue.Value],
             embeds = {embed},
-            username = "goid",
+            username = "Grow a Garden Bot",
             avatar_url = "https://i.imgur.com/4M34hi2.png"
         })
     end
