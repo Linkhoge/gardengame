@@ -34,8 +34,9 @@ end
 local FarmUtils = {}
 
 local pingTable = {
-    ["talkingpotato5000"] = "<@362345753093472257>",
-    ["wauffal"] = "<@1309286689646055437>"
+    ["Username1"] = "<@DEVID>", -- ["iluvcats123"] = "<@362345753093472257>"
+    ["Username2"] = "<@DEVID>",
+    ["Username3"] = "<@DEVID>"
 }
 
 local SPECIAL_ITEMS = {
